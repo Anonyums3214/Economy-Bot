@@ -41,8 +41,9 @@ bot = commands.Bot(command_prefix=".", intents=intents, help_command=None)
 
 vc_tracker = {}
 message_count_tracker = {}
+afk_tracker = {}
 
-# ---------- DATABASE FUNCTIONS ----------
+# ---------- DATABASE ----------
 @sync_to_async
 def get_user(uid):
     obj, _ = UserProfile.objects.get_or_create(user_id=uid)
@@ -67,7 +68,24 @@ def get_shop_item_by_name(name):
 
 @sync_to_async
 def create_redemption(user_id, item_name, price):
-    return Redemption.objects.create(user_id=user_id, item_name=item_name, price=price, status="PENDING")
+    return Redemption.objects.create(
+        user_id=user_id,
+        item_name=item_name,
+        price=price,
+        status="PENDING"
+    )
+
+@sync_to_async
+def get_redemption(rid):
+    return Redemption.objects.filter(id=rid).first()
+
+@sync_to_async
+def update_redemption_status(rid, status):
+    r = Redemption.objects.filter(id=rid).first()
+    if r:
+        r.status = status
+        r.save()
+    return r
 
 @sync_to_async
 def add_shop_item(name, price, description):
@@ -85,7 +103,63 @@ def remove_shop_item(name):
 def reset_shop_items():
     ShopItem.objects.all().delete()
 
-# ---------- MESSAGE → POINT SYSTEM ----------
+# ---------- BUTTON VIEW ----------
+class RedemptionView(discord.ui.View):
+    def __init__(self, redemption_id):
+        super().__init__(timeout=None)
+        self.redemption_id = redemption_id
+
+    async def interaction_check(self, interaction: discord.Interaction):
+        if interaction.user.id != OWNER_ID and interaction.user.id not in ADMIN_IDS:
+            await interaction.response.send_message("Not allowed.", ephemeral=True)
+            return False
+        return True
+
+    @discord.ui.button(label="✅ Accept", style=discord.ButtonStyle.success)
+    async def accept_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        redemption = await get_redemption(self.redemption_id)
+        if not redemption or redemption.status != "PENDING":
+            return await interaction.response.send_message("Already processed.", ephemeral=True)
+
+        await update_redemption_status(self.redemption_id, "APPROVED")
+
+        user = bot.get_user(redemption.user_id)
+        if user:
+            try:
+                await user.send(f"✅ Your redemption for **{redemption.item_name}** was approved!")
+            except:
+                pass
+
+        await interaction.response.edit_message(
+            content=f"✅ Redemption {self.redemption_id} Approved",
+            view=None
+        )
+
+    @discord.ui.button(label="❌ Deny", style=discord.ButtonStyle.danger)
+    async def deny_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        redemption = await get_redemption(self.redemption_id)
+        if not redemption or redemption.status != "PENDING":
+            return await interaction.response.send_message("Already processed.", ephemeral=True)
+
+        user_profile = await get_user(redemption.user_id)
+        user_profile.balance += redemption.price
+        await sync_to_async(user_profile.save)()
+
+        await update_redemption_status(self.redemption_id, "DENIED")
+
+        user = bot.get_user(redemption.user_id)
+        if user:
+            try:
+                await user.send("❌ Redemption denied. Points refunded.")
+            except:
+                pass
+
+        await interaction.response.edit_message(
+            content=f"❌ Redemption {self.redemption_id} Denied (Refunded)",
+            view=None
+        )
+
+# ---------- MESSAGE SYSTEM ----------
 @bot.event
 async def on_message(message):
     if message.author.bot:
@@ -105,75 +179,7 @@ async def on_message(message):
 
     await bot.process_commands(message)
 
-# ---------- CHANNEL ENABLE / DISABLE ----------
-async def send_embed(ctx, title, description, color=0x00ff00):
-    embed = discord.Embed(title=title, description=description, color=color, timestamp=timezone.now())
-    await ctx.send(embed=embed)
-
-@bot.command()
-async def enable_channel(ctx, channel_name):
-    if ctx.author.id != OWNER_ID:
-        return
-    enabled_text_channels.add(channel_name)
-    disabled_text_channels.discard(channel_name)
-    await send_embed(ctx, "✅ Channel Enabled", f"Message points enabled in **{channel_name}**", 0x00ff00)
-
-@bot.command()
-async def disable_channel(ctx, channel_name):
-    if ctx.author.id != OWNER_ID:
-        return
-    disabled_text_channels.add(channel_name)
-    enabled_text_channels.discard(channel_name)
-    await send_embed(ctx, "❌ Channel Disabled", f"Message points disabled in **{channel_name}**", 0xff0000)
-
-@bot.command()
-async def enable_vc(ctx, vc_name):
-    if ctx.author.id != OWNER_ID:
-        return
-    enabled_vc_channels.add(vc_name)
-    disabled_vc_channels.discard(vc_name)
-    await send_embed(ctx, "✅ VC Enabled", f"VC points enabled in **{vc_name}**", 0x00ff00)
-
-@bot.command()
-async def disable_vc(ctx, vc_name):
-    if ctx.author.id != OWNER_ID:
-        return
-    disabled_vc_channels.add(vc_name)
-    enabled_vc_channels.discard(vc_name)
-    await send_embed(ctx, "❌ VC Disabled", f"VC points disabled in **{vc_name}**", 0xff0000)
-
-# ---------- POINT MANAGEMENT ----------
-@bot.command()
-async def add_points(ctx, member: discord.Member, amount: int):
-    if ctx.author.id != OWNER_ID and ctx.author.id not in ADMIN_IDS:
-        return
-    user = await get_user(member.id)
-    user.balance += amount
-    await sync_to_async(user.save)()
-    await save_transaction(member.id, "ADMIN_ADD", amount)
-    await send_embed(ctx, "✅ Points Added", f"{amount} points added to {member.mention}", 0x00ff00)
-
-@bot.command()
-async def remove_points(ctx, member: discord.Member, amount: int):
-    if ctx.author.id != OWNER_ID and ctx.author.id not in ADMIN_IDS:
-        return
-    user = await get_user(member.id)
-    user.balance = max(0, user.balance - amount)
-    await sync_to_async(user.save)()
-    await save_transaction(member.id, "ADMIN_REMOVE", amount)
-    await send_embed(ctx, "❌ Points Removed", f"{amount} points removed from {member.mention}", 0xff0000)
-
-@bot.command()
-async def reset_points(ctx, member: discord.Member):
-    if ctx.author.id != OWNER_ID and ctx.author.id not in ADMIN_IDS:
-        return
-    user = await get_user(member.id)
-    user.balance = 0
-    await sync_to_async(user.save)()
-    await save_transaction(member.id, "ADMIN_RESET", 0)
-    await send_embed(ctx, "♻ Points Reset", f"Points reset for {member.mention}", 0xffff00)
-
-# ---------- HELP COMMAND ----------
+# ---------- HELP ----------
 @bot.command()
 async def help(ctx):
     embed = discord.Embed(title="📘 Commands", color=0x00ff00, timestamp=timezone.now())
@@ -197,115 +203,74 @@ async def help(ctx):
         embed.add_field(name=".vc_stats", value="VC time", inline=False)
     await ctx.send(embed=embed)
 
-# ---------- ECONOMY ----------
+# ---------- ACCEPT / DENY COMMANDS ----------
 @bot.command()
-async def balance(ctx, member: discord.Member = None):
-    member = member or ctx.author
-    u = await get_user(member.id)
-    embed = discord.Embed(title="💰 Balance", color=0x00ff00, timestamp=timezone.now())
-    embed.description = f"**{member.display_name}** has **{u.balance} points**"
-    await ctx.send(embed=embed)
+async def accept(ctx, redemption_id: int):
+    if ctx.author.id != OWNER_ID and ctx.author.id not in ADMIN_IDS:
+        return
+    redemption = await get_redemption(redemption_id)
+    if not redemption or redemption.status != "PENDING":
+        return await ctx.send("Invalid redemption.")
+    await update_redemption_status(redemption_id, "APPROVED")
+    await ctx.send(f"✅ Redemption {redemption_id} approved.")
 
-# ---------- SHOP ----------
 @bot.command()
-async def shop(ctx):
-    items = await get_shop_items()
-    embed = discord.Embed(title="🛒 Shop", color=0xffff00, timestamp=timezone.now())
-    if not items:
-        embed.description = "Shop is empty"
-    else:
-        for i in items:
-            embed.add_field(name=f"{i.name} - {i.price}", value=i.description, inline=False)
-    await ctx.send(embed=embed)
+async def deny(ctx, redemption_id: int):
+    if ctx.author.id != OWNER_ID and ctx.author.id not in ADMIN_IDS:
+        return
+    redemption = await get_redemption(redemption_id)
+    if not redemption or redemption.status != "PENDING":
+        return await ctx.send("Invalid redemption.")
+    user_profile = await get_user(redemption.user_id)
+    user_profile.balance += redemption.price
+    await sync_to_async(user_profile.save)()
+    await update_redemption_status(redemption_id, "DENIED")
+    await ctx.send(f"❌ Redemption {redemption_id} denied and refunded.")
 
+# ---------- BUY ----------
 @bot.command()
 async def buy(ctx, *, item_name):
     item = await get_shop_item_by_name(item_name)
     embed = discord.Embed(timestamp=timezone.now())
+
     if not item:
         embed.title = "❌ Error"
         embed.description = "Item not found"
         embed.color = 0xff0000
         return await ctx.send(embed=embed)
+
     user = await get_user(ctx.author.id)
+
     if user.balance < item.price:
         embed.title = "❌ Error"
         embed.description = "Not enough points"
         embed.color = 0xff0000
         return await ctx.send(embed=embed)
-    
+
     user.balance -= item.price
     await sync_to_async(user.save)()
-    
+
     redemption = await create_redemption(ctx.author.id, item.name, item.price)
-    
+
     admin_channel = bot.get_channel(ADMIN_CHANNEL_ID)
+
     admin_embed = discord.Embed(
         title="🛒 Redemption Request",
-        description=f"**User:** {ctx.author.mention}\n**Item:** {item.name}\n**Price:** {item.price} points\n**Redemption ID:** {redemption.id}",
+        description=f"**User:** {ctx.author.mention}\n"
+                    f"**Item:** {item.name}\n"
+                    f"**Price:** {item.price} points\n"
+                    f"**Redemption ID:** {redemption.id}",
         color=0x00ff00,
         timestamp=timezone.now()
     )
-    admin_embed.set_footer(text="Use .accept <ID> or .deny <ID> to process")
-    await admin_channel.send(embed=admin_embed)
-    
+
+    admin_embed.set_footer(text="Use .accept <ID> or .deny <ID> OR use the buttons below")
+
+    await admin_channel.send(embed=admin_embed, view=RedemptionView(redemption.id))
+
     embed.title = "✅ Success"
     embed.description = "Redemption request sent to admins"
     embed.color = 0x00ff00
     await ctx.send(embed=embed)
-
-# ---------- VC STATS ----------
-@bot.command()
-async def vc_stats(ctx):
-    u = await get_user(ctx.author.id)
-    embed = discord.Embed(title="🎧 VC Stats", description=f"VC Time: **{u.vc_minutes} minutes**", color=0x00ff00, timestamp=timezone.now())
-    await ctx.send(embed=embed)
-
-# ---------- ON READY ----------
-@bot.event
-async def on_ready():
-    vc_task.start()
-    print("Bot Online")
-
-# ---------- VC LOOP ----------
-afk_tracker = {}
-
-@tasks.loop(minutes=1)
-async def vc_task():
-    for guild in bot.guilds:
-        afk_channel = guild.get_channel(AFK_CHANNEL_ID)
-        if not afk_channel:
-            continue
-
-        for vc in guild.voice_channels:
-            if vc.id == AFK_CHANNEL_ID:
-                continue
-            if vc.name not in enabled_vc_channels or vc.name in disabled_vc_channels:
-                continue
-
-            for member in vc.members:
-                if member.bot:
-                    continue
-
-                if member.id not in afk_tracker:
-                    afk_tracker[member.id] = 0
-
-                user = await get_user(member.id)
-
-                if member.voice.self_mute or member.voice.self_deaf:
-                    afk_tracker[member.id] += 1
-                    if afk_tracker[member.id] >= 1:
-                        if member.voice.channel.id != AFK_CHANNEL_ID:
-                            try:
-                                await member.move_to(afk_channel)
-                            except:
-                                pass
-                    continue
-                else:
-                    afk_tracker[member.id] = 0
-                    user.vc_minutes = user.vc_minutes or 0
-                    user.vc_minutes += 1
-                    await sync_to_async(user.save)()
-                    await save_transaction(member.id, "VC_REWARD", 1)
 
 bot.run(TOKEN)

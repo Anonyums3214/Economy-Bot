@@ -28,7 +28,6 @@ ADMIN_CHANNEL_ID = 1439934427852443688
 AFK_CHANNEL_ID = 1425159320001056919
 ACTIVE_VC_IDS = {
     1469625366477013198,  # VC 1
-    1425159313152016525,  # VC 2
     1462365089305985055,
     1459676906244014171,
     1459677374911352852,
@@ -44,6 +43,7 @@ ACTIVE_VC_IDS = {
 DISABLED_VC_IDS = {
     1463833480885440617,
     1460372096998707421,
+    1425159313152016525,
 }
 # ---------- ENABLED / DISABLED CHANNELS ----------
 enabled_text_channels = set()
@@ -325,7 +325,7 @@ async def vc_task():
                     afk_tracker[member.id] += 1
 
                     # Move after 1 minute (change number if needed)
-                    if afk_tracker[member.id] >= 1:
+                    if afk_tracker[member.id] >= 5:
                         if member.voice.channel.id != AFK_CHANNEL_ID:
                             try:
                                 await member.move_to(afk_channel)

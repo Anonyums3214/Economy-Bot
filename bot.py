@@ -26,9 +26,11 @@ OWNER_ID = 716982756017569813
 ADMIN_IDS = []
 ADMIN_CHANNEL_ID = 1439934427852443688
 AFK_CHANNEL_ID = 1425159320001056919
+
 ACTIVE_VC_IDS = {
-    1469625366477013198,  # VC 1
+    1469625366477013198, #Hangout VC
     1462365089305985055,
+    1439938056613265551,
     1459676906244014171,
     1459677374911352852,
     1472587015324434444,
@@ -36,20 +38,24 @@ ACTIVE_VC_IDS = {
     1459677452769956075,
     1459677833403170877,
     1459678015540695175,
-    1439938056613265551,
 }
 
-# Put VC IDs where rewards should NOT work
 DISABLED_VC_IDS = {
-    1463833480885440617,
-    1460372096998707421,
     1425159313152016525,
+    1460372096998707421,
 }
-# ---------- ENABLED / DISABLED CHANNELS ----------
-enabled_text_channels = set()
-disabled_text_channels = set()
-enabled_vc_channels = set()
-disabled_vc_channels = set()
+
+# ---------------- TEXT CHANNEL CONFIG ----------------
+
+ACTIVE_TEXT_CHANNEL_IDS = {
+    1425159345938890956,
+    1452997490457706580,
+}
+
+DISABLED_TEXT_CHANNEL_IDS = {
+    1460371190873854167,
+}
+
 
 # ---------- INTENTS ----------
 intents = discord.Intents.all()
@@ -109,17 +115,25 @@ async def on_message(message):
     if message.author.bot:
         return
 
-    channel_name = message.channel.name
-    if channel_name in enabled_text_channels and channel_name not in disabled_text_channels:
-        uid = message.author.id
-        message_count_tracker[uid] = message_count_tracker.get(uid, 0) + 1
+    # Only reward in active text channels
+    if message.channel.id not in ACTIVE_TEXT_CHANNEL_IDS:
+        await bot.process_commands(message)
+        return
 
-        if message_count_tracker[uid] >= 5:
-            user = await get_user(uid)
-            user.balance += 1
-            await sync_to_async(user.save)()
-            await save_transaction(uid, "MESSAGE_REWARD", 1)
-            message_count_tracker[uid] = 0
+    # Skip disabled text channels
+    if message.channel.id in DISABLED_TEXT_CHANNEL_IDS:
+        await bot.process_commands(message)
+        return
+
+    uid = message.author.id
+    message_count_tracker[uid] = message_count_tracker.get(uid, 0) + 1
+
+    if message_count_tracker[uid] >= 5:
+        user = await get_user(uid)
+        user.balance += 1
+        await sync_to_async(user.save)()
+        await save_transaction(uid, "MESSAGE_REWARD", 1)
+        message_count_tracker[uid] = 0
 
     await bot.process_commands(message)
 
@@ -128,37 +142,6 @@ async def send_embed(ctx, title, description, color=0x00ff00):
     embed = discord.Embed(title=title, description=description, color=color, timestamp=timezone.now())
     await ctx.send(embed=embed)
 
-@bot.command()
-async def enable_channel(ctx, channel_name):
-    if ctx.author.id != OWNER_ID:
-        return
-    enabled_text_channels.add(channel_name)
-    disabled_text_channels.discard(channel_name)
-    await send_embed(ctx, "✅ Channel Enabled", f"Message points enabled in **{channel_name}**", 0x00ff00)
-
-@bot.command()
-async def disable_channel(ctx, channel_name):
-    if ctx.author.id != OWNER_ID:
-        return
-    disabled_text_channels.add(channel_name)
-    enabled_text_channels.discard(channel_name)
-    await send_embed(ctx, "❌ Channel Disabled", f"Message points disabled in **{channel_name}**", 0xff0000)
-
-@bot.command()
-async def enable_vc(ctx, vc_name):
-    if ctx.author.id != OWNER_ID:
-        return
-    enabled_vc_channels.add(vc_name)
-    disabled_vc_channels.discard(vc_name)
-    await send_embed(ctx, "✅ VC Enabled", f"VC points enabled in **{vc_name}**", 0x00ff00)
-
-@bot.command()
-async def disable_vc(ctx, vc_name):
-    if ctx.author.id != OWNER_ID:
-        return
-    disabled_vc_channels.add(vc_name)
-    enabled_vc_channels.discard(vc_name)
-    await send_embed(ctx, "❌ VC Disabled", f"VC points disabled in **{vc_name}**", 0xff0000)
 
 # ---------- POINT MANAGEMENT ----------
 @bot.command()
@@ -342,6 +325,5 @@ async def vc_task():
 
                     await sync_to_async(user.save)()
                     await save_transaction(member.id, "VC_REWARD", 1)
-
 
 bot.run(TOKEN)

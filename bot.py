@@ -26,7 +26,25 @@ OWNER_ID = 716982756017569813
 ADMIN_IDS = []
 ADMIN_CHANNEL_ID = 1439934427852443688
 AFK_CHANNEL_ID = 1425159320001056919
+ACTIVE_VC_IDS = {
+    1469625366477013198,  # VC 1
+    1425159313152016525,  # VC 2
+    1462365089305985055,
+    1459676906244014171,
+    1459677374911352852,
+    1472587015324434444,
+    1459677406204923934,
+    1459677452769956075,
+    1459677833403170877,
+    1459678015540695175,
+    1439938056613265551,
+}
 
+# Put VC IDs where rewards should NOT work
+DISABLED_VC_IDS = {
+    1463833480885440617,
+    1460372096998707421,
+}
 # ---------- ENABLED / DISABLED CHANNELS ----------
 enabled_text_channels = set()
 disabled_text_channels = set()
@@ -273,17 +291,27 @@ afk_tracker = {}
 @tasks.loop(minutes=1)
 async def vc_task():
     for guild in bot.guilds:
+
         afk_channel = guild.get_channel(AFK_CHANNEL_ID)
         if not afk_channel:
             continue
 
         for vc in guild.voice_channels:
+
+            # Skip AFK channel itself
             if vc.id == AFK_CHANNEL_ID:
                 continue
-            if vc.name not in enabled_vc_channels or vc.name in disabled_vc_channels:
+
+            # Only allow active VC IDs
+            if vc.id not in ACTIVE_VC_IDS:
+                continue
+
+            # Skip disabled VC IDs
+            if vc.id in DISABLED_VC_IDS:
                 continue
 
             for member in vc.members:
+
                 if member.bot:
                     continue
 
@@ -292,8 +320,11 @@ async def vc_task():
 
                 user = await get_user(member.id)
 
+                # ---------------- AFK CHECK ----------------
                 if member.voice.self_mute or member.voice.self_deaf:
                     afk_tracker[member.id] += 1
+
+                    # Move after 1 minute (change number if needed)
                     if afk_tracker[member.id] >= 1:
                         if member.voice.channel.id != AFK_CHANNEL_ID:
                             try:
@@ -301,11 +332,16 @@ async def vc_task():
                             except:
                                 pass
                     continue
+
+                # ---------------- ACTIVE USER ----------------
                 else:
                     afk_tracker[member.id] = 0
+
                     user.vc_minutes = user.vc_minutes or 0
                     user.vc_minutes += 1
+
                     await sync_to_async(user.save)()
                     await save_transaction(member.id, "VC_REWARD", 1)
+
 
 bot.run(TOKEN)
